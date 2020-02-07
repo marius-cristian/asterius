@@ -91,15 +91,37 @@ export class GC {
      * @name GC#liveJSVals
      */
     this.liveJSVals = new Set();
-    Object.freeze(this);
+    // AC
+    this.rememberedSet = new Set(); // collapse to this.workList :-)
+    /**
+     * Whether to perform a major or minor collection.
+     * A minor collection collects only the younger generation (gen 0),
+     * while a major collects both gen 0 and gen 1.
+     */
+    this.major = true;
+    // AC
+    // Object.freeze(this);
   }
 
-  /**
-   * Stores the given closure in the remembered set.
-   * @param c The mutated closure
-   */
+  // FIXME
   recordMutated(c) {
-    // TODO: stub
+    const untagged_c = Memory.unDynTag(c);
+    let info = Number(this.memory.i64Load(untagged_c));
+    let type = this.memory.i32Load(info + rtsConstants.offset_StgInfoTable_type);
+    if (this.gen_no(c) > 0) {
+      if (this.rememberedSet.has(untagged_c)) {
+        throw WebAssembly.RuntimeError("Duplicates in the remembSet" + type);
+      }
+      if (this.memory.heapAlloced(untagged_c))
+        this.liveMBlocks.add(bdescr(untagged_c));
+      this.rememberedSet.add(untagged_c);
+    } else {console.error("(ignore) recordClosureMutated", c, type);}
+  }
+
+  // FIXME
+  gen_no(c) {
+    const nc = Number(c);
+    return this.memory.i16Load(nc - (nc & (rtsConstants.mblock_size - 1)) + rtsConstants.offset_first_block);
   }
 
   /**
@@ -115,13 +137,13 @@ export class GC {
   }
 
   /**
-   * Heap alloactes a physical copy of the given closure.
+   * Heap allocates a physical copy of the given closure.
    * Used during evacuation by {@link GC#evacuateClosure}.
    * @param c The source address of the closure
    * @param bytes The size in bytes of the closure 
    */
   copyClosure(c, bytes) {
-    const dest_c = this.heapAlloc.allocate(Math.ceil(bytes / 8));
+    const dest_c = this.heapAlloc.allocate(Math.ceil(bytes / 8), false);
     this.memory.memcpy(dest_c, c, bytes);
     this.liveMBlocks.add(bdescr(dest_c));
     this.deadMBlocks.add(bdescr(c));
@@ -256,8 +278,10 @@ export class GC {
       this.liveJSVals.add(Number(c));
       return c;
     }
+
     const tag = Memory.getDynTag(c),
       untagged_c = Memory.unDynTag(c);
+
     let info = Number(this.memory.i64Load(untagged_c));
 
     if (info % 2) {
@@ -267,6 +291,10 @@ export class GC {
     } else if (this.nonMovedObjects.has(untagged_c)) {
       // The closure is eiter pinned or static, and has
       // already been enqueued for scavenging: just return it
+      return c;
+    } else if (!this.major && this.gen_no(untagged_c) > 0) {
+      if (this.memory.heapAlloced(untagged_c))
+        this.liveMBlocks.add(bdescr(untagged_c));
       return c;
     } else if (!this.memory.heapAlloced(untagged_c)) {
       // Object in the static part of the memory:
@@ -482,6 +510,25 @@ export class GC {
 
   scavengePointersFirst(payload, ptrs) {
     for (let i = 0; i < ptrs; ++i) this.scavengeClosureAt(payload + (i << 3));
+  }
+
+  // FIXME:
+  // scavenge only the marked areas of a MUT_ARR_PTRS
+  scavengeMutArrPtrsMarked(p, ptrs) {
+    const cards = p + (ptrs << 3);
+    const c = 1 << rtsConstants.MUT_ARR_PTRS_CARD_BITS;
+    const mutArrPtrsCards = ((ptrs + c - 1) >> rtsConstants.MUT_ARR_PTRS_CARD_BITS);
+    for (let m = 0; m < mutArrPtrsCards; m++) {
+      if (this.memory.i8Load(cards + m) != 0) {
+        this.memory.i8Store(cards + m, 0); // clean up
+        const q = Math.min(p + c, cards);
+        for (; p < q; p += 8) {
+          this.scavengeClosureAt(p);
+        }
+      } else {
+        p += c;
+      }
+    }
   }
 
   scavengeSmallBitmap(payload, bitmap, size) {
@@ -753,7 +800,10 @@ export class GC {
         this.scavengePointersFirst(c + 8, ptrs);
         break;
       }
-      case ClosureTypes.BLACKHOLE:
+      case ClosureTypes.BLACKHOLE: {
+        this.scavengeClosureAt(c + rtsConstants.offset_StgInd_indirectee);
+        break;
+      }
       case ClosureTypes.MUT_VAR_CLEAN:
       case ClosureTypes.MUT_VAR_DIRTY:
       case ClosureTypes.PRIM:
@@ -763,6 +813,9 @@ export class GC {
           info + rtsConstants.offset_StgInfoTable_layout
         );
         this.scavengePointersFirst(c + 8, ptrs);
+        if (type == ClosureTypes.MUT_VAR_DIRTY) {
+          this.memory.i64Store(c, this.symbolTable["stg_MUT_VAR_CLEAN_info"]);
+        }
         break;
       }
       case ClosureTypes.THUNK_STATIC:
@@ -833,6 +886,9 @@ export class GC {
       }
       case ClosureTypes.MVAR_CLEAN:
       case ClosureTypes.MVAR_DIRTY: {
+        if (type == ClosureTypes.MVAR_DIRTY) {
+          this.memory.i64Store(c, this.symbolTable["stg_MVAR_CLEAN_info"]);
+        }
         this.scavengeClosureAt(c + rtsConstants.offset_StgMVar_head);
         this.scavengeClosureAt(c + rtsConstants.offset_StgMVar_tail);
         this.scavengeClosureAt(c + rtsConstants.offset_StgMVar_value);
@@ -841,10 +897,7 @@ export class GC {
       case ClosureTypes.ARR_WORDS: {
         break;
       }
-      case ClosureTypes.MUT_ARR_PTRS_CLEAN:
-      case ClosureTypes.MUT_ARR_PTRS_DIRTY:
-      case ClosureTypes.MUT_ARR_PTRS_FROZEN_DIRTY:
-      case ClosureTypes.MUT_ARR_PTRS_FROZEN_CLEAN: {
+      case ClosureTypes.MUT_ARR_PTRS_CLEAN: {
         const ptrs = Number(
           this.memory.i64Load(c + rtsConstants.offset_StgMutArrPtrs_ptrs)
         );
@@ -852,6 +905,33 @@ export class GC {
           c + rtsConstants.offset_StgMutArrPtrs_payload,
           ptrs
         );
+        break;
+      }
+      case ClosureTypes.MUT_ARR_PTRS_DIRTY: {
+        // WIP
+        const ptrs = Number(
+          this.memory.i64Load(c + rtsConstants.offset_StgMutArrPtrs_ptrs)
+        );
+        this.scavengeMutArrPtrsMarked(
+          c + rtsConstants.offset_StgMutArrPtrs_payload,
+          ptrs
+        );
+        this.memory.i64Store(c, this.symbolTable["stg_MUT_ARR_PTRS_CLEAN_info"]);
+        break;
+      }
+      case ClosureTypes.MUT_ARR_PTRS_FROZEN_DIRTY:
+      case ClosureTypes.MUT_ARR_PTRS_FROZEN_CLEAN: {
+        // follow everything FIXME: why?!?
+        const ptrs = Number(
+          this.memory.i64Load(c + rtsConstants.offset_StgMutArrPtrs_ptrs)
+        );
+        this.scavengePointersFirst(
+          c + rtsConstants.offset_StgMutArrPtrs_payload,
+          ptrs
+        );
+        if (type == ClosureTypes.MUT_ARR_PTRS_FROZEN_DIRTY) {
+          this.memory.i64Store(c, this.symbolTable["stg_MUT_ARR_PTRS_FROZEN_CLEAN_info"]);
+        }
         break;
       }
       case ClosureTypes.WEAK: {
@@ -862,10 +942,12 @@ export class GC {
         break;
       }
       case ClosureTypes.TSO: {
+        this.memory.i32Store(c + rtsConstants.offset_StgTSO_dirty, 0); // set clean
         this.scavengeClosureAt(c + rtsConstants.offset_StgTSO_stackobj);
         break;
       }
       case ClosureTypes.STACK: {
+        this.memory.i32Store(c + rtsConstants.offset_StgStack_dirty, 0); // set clean
         const stack_size = this.memory.i32Load(
             c + rtsConstants.offset_StgStack_stack_size
           ),
@@ -878,12 +960,18 @@ export class GC {
       case ClosureTypes.SMALL_MUT_ARR_PTRS_DIRTY:
       case ClosureTypes.SMALL_MUT_ARR_PTRS_FROZEN_DIRTY:
       case ClosureTypes.SMALL_MUT_ARR_PTRS_FROZEN_CLEAN: {
+        const ptrs = Number(
+          this.memory.i64Load(c + rtsConstants.offset_StgSmallMutArrPtrs_ptrs)
+        );
         this.scavengePointersFirst(
           c + rtsConstants.offset_StgSmallMutArrPtrs_payload,
-          Number(
-            this.memory.i64Load(c + rtsConstants.offset_StgSmallMutArrPtrs_ptrs)
-          )
+          ptrs
         );
+        if (type == ClosureTypes.SMALL_MUT_ARR_PTRS_DIRTY) {
+          this.memory.i64Store(c, this.symbolTable["stg_SMALL_MUT_ARR_PTRS_CLEAN_info"]);
+        } else if (type == ClosureTypes.SMALL_MUT_ARR_PTRS_FROZEN_DIRTY) {
+          this.memory.i64Store(c, this.symbolTable["stg_SMALL_MUT_ARR_PTRS_FROZEN_CLEAN_info"]);
+        }
         break;
       }
       default:
@@ -915,7 +1003,7 @@ export class GC {
     // in the 'rCurrentNursery' field of the StgRegTable of the main capability.
     this.memory.i64Store(
       base_reg + rtsConstants.offset_StgRegTable_rCurrentNursery,
-      this.heapAlloc.hpAlloc(hp_alloc)
+      this.heapAlloc.hpAlloc(hp_alloc, false, 0)
     );
   }
 
@@ -923,17 +1011,25 @@ export class GC {
    * Performs garbage collection, using scheduler Thread State Objects (TSOs) as roots.
    */
   performGC() {
-    if (this.yolo || this.heapAlloc.liveSize() < this.gcThreshold) {
-      // Garbage collection is skipped. This happens in yolo mode,
-      // or when the total number of "live" MBlocks is below the given threshold
-      // (by "live", we mean allocated and not yet freed - see HeapAlloc.liveSize).
-      // This avoids a lot of GC invocations
-      // (see {@link https://github.com/tweag/asterius/pull/379}).
-      this.updateNursery();
-      return;
-    }
+    // if (this.yolo || this.heapAlloc.liveSize() < this.gcThreshold) {
+    //   // Garbage collection is skipped. This happens in yolo mode,
+    //   // or when the total number of "live" MBlocks is below the given threshold
+    //   // (by "live", we mean allocated and not yet freed - see HeapAlloc.liveSize).
+    //   // This avoids a lot of GC invocations
+    //   // (see {@link https://github.com/tweag/asterius/pull/379}).
+    //   this.updateNursery();
+    //   return;
+    // }
+    // console.log("GC", this.major);
     this.reentrancyGuard.enter(1);
-    this.heapAlloc.initUnpinned();
+    if (this.major) {
+      this.heapAlloc.generations[1] = undefined; // AC XXX
+    } else {
+      this.workList = Array.from(this.rememberedSet);
+    }
+    this.rememberedSet.clear();
+    this.heapAlloc.setGenerationNo(1);
+    
 
     // Evacuate TSOs
     for (const [_, tso_info] of this.scheduler.tsos) {
@@ -976,7 +1072,7 @@ export class GC {
     }
 
     // mark unused MBlocks
-    this.heapAlloc.handleLiveness(this.liveMBlocks, this.deadMBlocks);
+    this.heapAlloc.handleLiveness(this.liveMBlocks, this.deadMBlocks, this.major);
     // allocate a new nursery
     this.updateNursery();
     // garbage collect unused JSVals
@@ -987,5 +1083,7 @@ export class GC {
     this.deadMBlocks.clear();
     this.liveJSVals.clear();
     this.reentrancyGuard.exit(1);
+
+    this.major = !this.major;
   }
 }
