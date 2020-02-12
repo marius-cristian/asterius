@@ -20,10 +20,10 @@ import Asterius.Builtins
 import Asterius.CodeGen.Droppable
 import Asterius.EDSL
 import Asterius.Internals
+import Asterius.JSFFI.SafeJSFFI
 import Asterius.Passes.All
 import Asterius.Passes.Barf
 import Asterius.Passes.GlobalRegs
-import Asterius.Passes.SafeCCall
 import Asterius.Resolve
 import Asterius.Types
 import Asterius.TypesConv
@@ -1438,7 +1438,7 @@ marshalCmmBlock inner_nodes exit_node = do
       [e] -> e
       _ -> Block {name = "", bodys = es, blockReturnTypes = []}
 
-marshalCmmProc :: AsteriusEntitySymbol -> GHC.CmmGraph -> CodeGen Function
+marshalCmmProc :: AsteriusEntitySymbol -> GHC.CmmGraph -> CodeGen AsteriusModule
 marshalCmmProc sym GHC.CmmGraph {g_graph = GHC.GMany _ body _, ..} = do
   entry_k <- marshalLabel g_entry
   rbs <-
@@ -1459,15 +1459,24 @@ marshalCmmProc sym GHC.CmmGraph {g_graph = GHC.GMany _ body _, ..} = do
             }
         )
           : rbs
-  pure $ splitFunction sym $ adjustLocalRegs Function
-    { functionType = FunctionType {paramTypes = [], returnTypes = []},
-      varTypes = [],
-      body = CFG RelooperRun
-        { entry = entry_k,
-          blockMap = M.fromList blocks_unresolved,
-          labelHelper = 0
-        }
-    }
+      func_pre_split =
+        Function
+          { functionType = FunctionType {paramTypes = [], returnTypes = []},
+            varTypes = [],
+            body =
+              CFG
+                RelooperRun
+                  { entry = entry_k,
+                    blockMap = M.fromList blocks_unresolved,
+                    labelHelper = 0
+                  }
+          }
+      funcs_post_safejsffi = splitFunction sym func_pre_split
+      funcs_post_localregs =
+        [(k, adjustLocalRegs f) | (k, f) <- funcs_post_safejsffi]
+      funcs_post_barf =
+        mconcat [processBarf k f | (k, f) <- funcs_post_localregs]
+  pure funcs_post_barf
 
 marshalCmmDecl ::
   GHC.GenCmmDecl GHC.CmmStatics h GHC.CmmGraph -> CodeGen AsteriusModule
@@ -1481,17 +1490,20 @@ marshalCmmDecl decl = case decl of
   GHC.CmmProc _ clbl _ g -> do
     sym <- marshalCLabel clbl
     r <- unCodeGen $ marshalCmmProc sym g
-    let f = case r of
-          Left err -> Function
+    pure $ case r of
+      Left err ->
+        processBarf
+          sym
+          Function
             { functionType = FunctionType {paramTypes = [], returnTypes = []},
               varTypes = [],
-              body = Barf
-                { barfMessage = fromString $ show err,
-                  barfReturnTypes = []
-                }
+              body =
+                Barf
+                  { barfMessage = fromString $ show err,
+                    barfReturnTypes = []
+                  }
             }
-          Right f' -> f'
-    pure $ processBarf sym f
+      Right m' -> m'
 
 marshalHaskellIR :: GHC.Module -> HaskellIR -> CodeGen AsteriusModule
 marshalHaskellIR this_mod HaskellIR {..} = marshalRawCmm this_mod cmmRaw
