@@ -278,8 +278,7 @@ stg_newArrayzh ( W_ n /* words */, gcptr init )
 
 stg_unsafeThawArrayzh ( gcptr arr )
 {
-    // A MUT_ARR_PTRS always lives on a mut_list, but a MUT_ARR_PTRS_FROZEN
-    // doesn't. To decide whether to add the thawed array to a mut_list we check
+    // To decide whether to add the thawed array to a mut_list we check
     // the info table. MUT_ARR_PTRS_FROZEN_DIRTY means it's already on a
     // mut_list so no need to add it again. MUT_ARR_PTRS_FROZEN_CLEAN means it's
     // not and we should add it to a mut_list.
@@ -350,7 +349,11 @@ stg_casArrayzh ( gcptr arr, W_ ind, gcptr old, gcptr new )
         return (1,h);
     } else {
         // Compare and Swap Succeeded:
-        SET_HDR(arr, stg_MUT_ARR_PTRS_DIRTY_info, CCCS);
+        if (StgHeader_info(arr) == stg_MUT_ARR_PTRS_CLEAN_info) {
+            // GC write barrier
+            SET_INFO(arr,stg_MUT_ARR_PTRS_DIRTY_info);
+            recordMutable(arr);
+        }
         len = StgMutArrPtrs_ptrs(arr);
         // The write barrier.  We must write a byte into the mark table:
         I8[arr + SIZEOF_StgMutArrPtrs + WDS(len) + (ind >> MUT_ARR_PTRS_CARD_BITS )] = 1;
@@ -376,6 +379,7 @@ stg_newArrayArrayzh ( W_ n /* words */ )
     }
     TICK_ALLOC_PRIM(SIZEOF_StgMutArrPtrs, WDS(size), 0);
 
+    /* No write barrier needed since this is a new allocation. */
     SET_HDR(arr, stg_MUT_ARR_PTRS_DIRTY_info, W_[CCCS]);
     StgMutArrPtrs_ptrs(arr) = n;
     StgMutArrPtrs_size(arr) = size;
@@ -433,7 +437,6 @@ stg_unsafeThawSmallArrayzh ( gcptr arr )
     if (StgHeader_info(arr) != stg_SMALL_MUT_ARR_PTRS_FROZEN_DIRTY_info) {
         SET_INFO(arr, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
         recordMutable(arr);
-        // must be done after SET_INFO, because it ASSERTs closure_MUTABLE()
         return (arr);
     } else {
         SET_INFO(arr, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
@@ -466,7 +469,10 @@ stg_copySmallArrayzh ( gcptr src, W_ src_off, gcptr dst, W_ dst_off, W_ n)
 {
     W_ dst_p, src_p, bytes;
 
-    SET_INFO(dst, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
+    if (StgHeader_info(dst) != stg_SMALL_MUT_ARR_PTRS_DIRTY_info) {
+        SET_INFO(dst, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
+        recordMutable(dst);
+    }
 
     dst_p = dst + SIZEOF_StgSmallMutArrPtrs + WDS(dst_off);
     src_p = src + SIZEOF_StgSmallMutArrPtrs + WDS(src_off);
@@ -480,7 +486,11 @@ stg_copySmallMutableArrayzh ( gcptr src, W_ src_off, gcptr dst, W_ dst_off, W_ n
 {
     W_ dst_p, src_p, bytes;
 
-    SET_INFO(dst, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
+
+    if (StgHeader_info(dst) != stg_SMALL_MUT_ARR_PTRS_DIRTY_info) {
+        SET_INFO(dst, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
+        recordMutable(dst);
+    }
 
     dst_p = dst + SIZEOF_StgSmallMutArrPtrs + WDS(dst_off);
     src_p = src + SIZEOF_StgSmallMutArrPtrs + WDS(src_off);
@@ -509,7 +519,12 @@ stg_casSmallArrayzh ( gcptr arr, W_ ind, gcptr old, gcptr new )
         return (1,h);
     } else {
         // Compare and Swap Succeeded:
-        SET_HDR(arr, stg_SMALL_MUT_ARR_PTRS_DIRTY_info, CCCS);
+        if (StgHeader_info(arr) != stg_SMALL_MUT_ARR_PTRS_DIRTY_info) {
+            // Set `arr` as mutated
+            SET_INFO(arr, stg_SMALL_MUT_ARR_PTRS_DIRTY_info);
+            recordMutable(arr);
+        }
+
         return (0,new);
     }
 }
@@ -1522,7 +1537,7 @@ stg_takeMVarzh ( P_ mvar /* :: MVar a */ )
      */
     if (StgMVar_value(mvar) == stg_END_TSO_QUEUE_closure) {
         if (info == stg_MVAR_CLEAN_info) {
-            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
         }
 
         // We want to put the heap check down here in the slow path,
@@ -1581,7 +1596,7 @@ loop:
     // There are putMVar(s) waiting... wake up the first thread on the queue
 
     if (info == stg_MVAR_CLEAN_info) {
-        ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+        ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", val "ptr");
     }
 
     tso = StgMVarTSOQueue_tso(q);
@@ -1650,7 +1665,7 @@ loop:
     // There are putMVar(s) waiting... wake up the first thread on the queue
 
     if (info == stg_MVAR_CLEAN_info) {
-        ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+        ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", val "ptr");
     }
 
     tso = StgMVarTSOQueue_tso(q);
@@ -1688,7 +1703,7 @@ stg_putMVarzh ( P_ mvar, /* :: MVar a */
     if (StgMVar_value(mvar) != stg_END_TSO_QUEUE_closure) {
 
         if (info == stg_MVAR_CLEAN_info) {
-            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
         }
 
         // We want to put the heap check down here in the slow path,
@@ -1722,14 +1737,20 @@ stg_putMVarzh ( P_ mvar, /* :: MVar a */
         jump stg_block_putmvar(mvar,val);
     }
 
+    // We are going to mutate the closure, make sure its current pointers
+    // are marked.
+    if (info == stg_MVAR_CLEAN_info) {
+        ccall update_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
+    }
+
     q = StgMVar_head(mvar);
 loop:
     if (q == stg_END_TSO_QUEUE_closure) {
         /* No further takes, the MVar is now full. */
-        if (info == stg_MVAR_CLEAN_info) {
-            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
-        }
         StgMVar_value(mvar) = val;
+        if (info == stg_MVAR_CLEAN_info) {
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
+        }
         unlockClosure(mvar, stg_MVAR_DIRTY_info);
         return ();
     }
@@ -1811,7 +1832,7 @@ loop:
     if (q == stg_END_TSO_QUEUE_closure) {
         /* No further takes, the MVar is now full. */
         if (info == stg_MVAR_CLEAN_info) {
-            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
         }
 
         StgMVar_value(mvar) = val;
@@ -1882,7 +1903,7 @@ stg_readMVarzh ( P_ mvar, /* :: MVar a */ )
     if (StgMVar_value(mvar) == stg_END_TSO_QUEUE_closure) {
 
         if (info == stg_MVAR_CLEAN_info) {
-            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr");
+            ccall dirty_MVAR(BaseReg "ptr", mvar "ptr", StgMVar_value(mvar) "ptr");
         }
 
         ALLOC_PRIM_WITH_CUSTOM_FAILURE
