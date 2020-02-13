@@ -120,6 +120,7 @@ rtsConstants =
                  ("offset_StgThunkInfoTable_i", offset_StgThunkInfoTable_i),
                  ("offset_StgThunkInfoTable_srt", offset_StgThunkInfoTable_srt),
                  ("offset_StgTSO_id", offset_StgTSO_id),
+                 ("offset_StgTSO_dirty", offset_StgTSO_dirty),
                  ("offset_StgTSO_stackobj", offset_StgTSO_stackobj),
                  ("offset_StgTSO_what_next", offset_StgTSO_what_next),
                  ("offset_StgTSO_why_blocked", offset_StgTSO_why_blocked),
@@ -128,6 +129,7 @@ rtsConstants =
                  ("offset_StgTSO_ffi_return", offset_StgTSO_ffi_return),
                  ("offset_StgTSO_saved_regs", offset_StgTSO_saved_regs),
                  ("offset_StgStack_stack_size", offset_StgStack_stack_size),
+                 ("offset_StgStack_dirty", offset_StgStack_dirty),
                  ("offset_StgStack_sp", offset_StgStack_sp),
                  ("offset_StgStack_stack", offset_StgStack_stack),
                  ("offset_StgUpdateFrame_updatee", offset_StgUpdateFrame_updatee),
@@ -145,6 +147,7 @@ rtsConstants =
                  ("offset_stat_dev", offset_stat_dev),
                  ("offset_stat_ino", offset_stat_ino),
                  ("clock_monotonic", clock_monotonic),
-                 ("clock_realtime", clock_realtime)
+                 ("clock_realtime", clock_realtime),
+                 ("MUT_ARR_PTRS_CARD_BITS", _MUT_ARR_PTRS_CARD_BITS)
                ]
          ]
