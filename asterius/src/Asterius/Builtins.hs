@@ -171,7 +171,9 @@ rtsAsteriusModule opts =
     <> threadPausedFunction opts
     <> dirtyMutVarFunction opts
     <> dirtyMVarFunction opts
+    <> updateMVarFunction opts
     <> dirtyStackFunction opts
+    <> recordMutableCapFunction opts
     <> recordClosureMutatedFunction opts
     <> tryWakeupThreadFunction opts
     <> raiseExceptionHelperFunction opts
@@ -518,6 +520,12 @@ rtsFunctionImports debug =
              externalModuleName = "GC",
              externalBaseName = "performGC",
              functionType = FunctionType {paramTypes = [], returnTypes = []}
+           },
+         FunctionImport
+           { internalName = "__asterius_recordMutated",
+             externalModuleName = "GC",
+             externalBaseName = "recordMutated",
+             functionType = FunctionType {paramTypes = [F64], returnTypes = []}
            },
          FunctionImport
            { internalName = "__asterius_raiseExceptionHelper",
@@ -930,7 +938,9 @@ hsInitFunction,
   threadPausedFunction,
   dirtyMutVarFunction,
   dirtyMVarFunction,
+  updateMVarFunction,
   dirtyStackFunction,
+  recordMutableCapFunction,
   recordClosureMutatedFunction,
   raiseExceptionHelperFunction,
   barfFunction,
@@ -1013,7 +1023,9 @@ dirtyTSO _ tso =
   if'
     []
     (eqZInt32 $ loadI32 tso offset_StgTSO_dirty)
-    (storeI32 tso offset_StgTSO_dirty $ constI32 1)
+    (do
+      storeI32 tso offset_StgTSO_dirty $ constI32 1
+      recordMutated tso)
     mempty
 
 dirtySTACK :: Expression -> Expression -> EDSL ()
@@ -1021,7 +1033,9 @@ dirtySTACK _ stack =
   if'
     []
     (eqZInt32 $ loadI32 stack offset_StgStack_dirty)
-    (storeI32 stack offset_StgStack_dirty $ constI32 1)
+    (do
+      storeI32 stack offset_StgStack_dirty $ constI32 1
+      recordMutated stack)
     mempty
 
 -- `_scheduleTSO(tso,func)` executes the given tso starting at the given
@@ -1434,25 +1448,41 @@ threadPausedFunction _ = runEDSL "threadPaused" $ do
   _ <- params [I64, I64]
   pure ()
 
+recordMutated :: Expression -> EDSL ()
+recordMutated p =
+  callImport "__asterius_recordMutated" [convertUInt64ToFloat64 p]
+
 dirtyMutVarFunction _ = runEDSL "dirty_MUT_VAR" $ do
   [_, p] <- params [I64, I64]
-  if'
-    []
-    (loadI64 p 0 `eqInt64` symbol "stg_MUT_VAR_CLEAN_info")
-    (storeI64 p 0 $ symbol "stg_MUT_VAR_DIRTY_info")
+  if' [] (loadI64 p 0 `eqInt64` symbol "stg_MUT_VAR_CLEAN_info")
+    (do
+      storeI64 p 0 $ symbol "stg_MUT_VAR_DIRTY_info"
+      recordMutated p)
     mempty
 
 dirtyMVarFunction _ = runEDSL "dirty_MVAR" $ do
-  [_basereg, _mvar] <- params [I64, I64]
-  mempty
+  [reg, p, old] <- params [I64, I64, I64]
+  call "update_MVAR" [reg, p, old]
+
+updateMVarFunction _ = runEDSL "update_MVAR" $ do 
+  [_, p, _old] <- params [I64, I64, I64]
+  if' [] (loadI64 p 0 `eqInt64` symbol "stg_MVAR_CLEAN_info")
+    (do
+      storeI64 p 0 $ symbol "stg_MVAR_DIRTY_info"
+      recordMutated p)
+    mempty
 
 dirtyStackFunction _ = runEDSL "dirty_STACK" $ do
   [cap, stack] <- params [I64, I64]
   dirtySTACK cap stack
 
 recordClosureMutatedFunction _ = runEDSL "recordClosureMutated" $ do
-  [_cap, _closure] <- params [I64, I64]
-  mempty
+  [_cap, p] <- params [I64, I64]
+  recordMutated p
+
+recordMutableCapFunction _ = runEDSL "recordMutableCap" $ do
+  [p, _cap, _gen] <- params [I64, I64, I64]
+  recordMutated p
 
 tryWakeupThreadFunction _ = runEDSL "tryWakeupThread" $ do
   [_cap, tso] <- params [I64, I64]
