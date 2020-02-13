@@ -95,6 +95,14 @@ export class GC {
   }
 
   /**
+   * Stores the given closure in the remembered set.
+   * @param c The mutated closure
+   */
+  recordMutated(c) {
+    // TODO: stub
+  }
+
+  /**
    * Checks whether the provided memory address resides
    * in a pinned MBlock. Used by {@link GC#evacuateClosure}
    * to avoid evacuating pinned objects.
