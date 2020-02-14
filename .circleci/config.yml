@@ -559,15 +559,4 @@ workflows:
             - asterius-boot
       - asterius-test-ghc-testsuite:
           requires:
-            - asterius-boot
-      - asterius-test-ghc-testsuite-yolo:
-          requires:
-            - asterius-boot
-      - asterius-test-ghc-testsuite-debug:
-          requires:
-            - asterius-boot
-      - asterius-test-ghc-testsuite-debug-yolo:
-          requires:
-            - asterius-boot
-      - asterius-build-wabt
-      - asterius-build-docs
+            - asterius-test-cabal
