@@ -91,37 +91,49 @@ export class GC {
      * @name GC#liveJSVals
      */
     this.liveJSVals = new Set();
-    // AC
-    this.rememberedSet = new Set(); // collapse to this.workList :-)
+    /**
+     * The set containing the closures that belong to gen 1 whose contents
+     * have been mutated since the last garbage collection.
+     */
+    this.rememberedSet = new Set();
+    // TODO: collapse to this.workList :-)
     /**
      * Whether to perform a major or minor collection.
      * A minor collection collects only the younger generation (gen 0),
      * while a major collects both gen 0 and gen 1.
      */
     this.major = true;
-    // AC
-    // Object.freeze(this);
+    Object.seal(this);
   }
 
-  // FIXME
+  /**
+   * Stores the given closure in the remembered set.
+   * @param c The mutated closure
+   */
   recordMutated(c) {
     const untagged_c = Memory.unDynTag(c);
     let info = Number(this.memory.i64Load(untagged_c));
     let type = this.memory.i32Load(info + rtsConstants.offset_StgInfoTable_type);
     if (this.gen_no(c) > 0) {
+      // FIXME: check for duplicates
       if (this.rememberedSet.has(untagged_c)) {
         throw WebAssembly.RuntimeError("Duplicates in the remembSet" + type);
       }
       if (this.memory.heapAlloced(untagged_c))
         this.liveMBlocks.add(bdescr(untagged_c));
       this.rememberedSet.add(untagged_c);
-    } else {console.error("(ignore) recordClosureMutated", c, type);}
+    } else {
+      // FIXME: remove this branch if unused
+      console.error("(ignore) recordClosureMutated", c, type, this.gen_no(c));
+    }
   }
 
-  // FIXME
+  /**
+   * Returns the generation number of the given closure.
+   * @param c The address of the closure.
+   */
   gen_no(c) {
-    const nc = Number(c);
-    return this.memory.i16Load(nc - (nc & (rtsConstants.mblock_size - 1)) + rtsConstants.offset_first_block);
+    return this.memory.i16Load(bdescr(c) + rtsConstants.offset_bdescr_gen_no);
   }
 
   /**
@@ -293,6 +305,8 @@ export class GC {
       // already been enqueued for scavenging: just return it
       return c;
     } else if (!this.major && this.gen_no(untagged_c) > 0) {
+      // This is a minor collection: older closures
+      // won't be evacuated. 
       if (this.memory.heapAlloced(untagged_c))
         this.liveMBlocks.add(bdescr(untagged_c));
       return c;
@@ -512,11 +526,19 @@ export class GC {
     for (let i = 0; i < ptrs; ++i) this.scavengeClosureAt(payload + (i << 3));
   }
 
-  // FIXME:
-  // scavenge only the marked areas of a MUT_ARR_PTRS
+  
+  /**
+   * Scavenge the pointers of a MUT_ARR, but only
+   * the areas that are marked as dirty in the 
+   * card table.
+   * @param p The address of the array payload
+   * @param ptrs The number of pointers in the array
+   */
   scavengeMutArrPtrsMarked(p, ptrs) {
+    // `cards` is the pointer to the card table
     const cards = p + (ptrs << 3);
     const c = 1 << rtsConstants.MUT_ARR_PTRS_CARD_BITS;
+    // The length (in bytes) of the card table
     const mutArrPtrsCards = ((ptrs + c - 1) >> rtsConstants.MUT_ARR_PTRS_CARD_BITS);
     for (let m = 0; m < mutArrPtrsCards; m++) {
       if (this.memory.i8Load(cards + m) != 0) {
@@ -816,6 +838,7 @@ export class GC {
         if (type == ClosureTypes.MUT_VAR_DIRTY) {
           this.memory.i64Store(c, this.symbolTable["stg_MUT_VAR_CLEAN_info"]);
         }
+        // AC: FIXME: export offset_StgMutVar_var and put in a different case
         break;
       }
       case ClosureTypes.THUNK_STATIC:
@@ -921,7 +944,8 @@ export class GC {
       }
       case ClosureTypes.MUT_ARR_PTRS_FROZEN_DIRTY:
       case ClosureTypes.MUT_ARR_PTRS_FROZEN_CLEAN: {
-        // follow everything FIXME: why?!?
+        // follow everything
+        // FIXME: is this correct?
         const ptrs = Number(
           this.memory.i64Load(c + rtsConstants.offset_StgMutArrPtrs_ptrs)
         );
@@ -960,6 +984,8 @@ export class GC {
       case ClosureTypes.SMALL_MUT_ARR_PTRS_DIRTY:
       case ClosureTypes.SMALL_MUT_ARR_PTRS_FROZEN_DIRTY:
       case ClosureTypes.SMALL_MUT_ARR_PTRS_FROZEN_CLEAN: {
+        // follow everything
+        // FIXME: is this correct?
         const ptrs = Number(
           this.memory.i64Load(c + rtsConstants.offset_StgSmallMutArrPtrs_ptrs)
         );
@@ -1011,24 +1037,21 @@ export class GC {
    * Performs garbage collection, using scheduler Thread State Objects (TSOs) as roots.
    */
   performGC() {
-    // if (this.yolo || this.heapAlloc.liveSize() < this.gcThreshold) {
-    //   // Garbage collection is skipped. This happens in yolo mode,
-    //   // or when the total number of "live" MBlocks is below the given threshold
-    //   // (by "live", we mean allocated and not yet freed - see HeapAlloc.liveSize).
-    //   // This avoids a lot of GC invocations
-    //   // (see {@link https://github.com/tweag/asterius/pull/379}).
-    //   this.updateNursery();
-    //   return;
-    // }
-    // console.log("GC", this.major);
+    if (this.yolo) { // FIXME: commented: || this.heapAlloc.liveSize() < this.gcThreshold) {
+      // Garbage collection is skipped. This happens in yolo mode,
+      // or when the total number of "live" MBlocks is below the given threshold
+      // (by "live", we mean allocated and not yet freed - see HeapAlloc.liveSize).
+      // This avoids a lot of GC invocations
+      // (see {@link https://github.com/tweag/asterius/pull/379}).
+      this.updateNursery();
+      return;
+    }
     this.reentrancyGuard.enter(1);
-    if (this.major) {
-      this.heapAlloc.generations[1] = undefined; // AC XXX
-    } else {
+    if (!this.major) {
       this.workList = Array.from(this.rememberedSet);
     }
     this.rememberedSet.clear();
-    this.heapAlloc.setGenerationNo(1);
+    this.heapAlloc.setGenerationNo(1, this.major);
     
 
     // Evacuate TSOs
@@ -1073,6 +1096,8 @@ export class GC {
 
     // mark unused MBlocks
     this.heapAlloc.handleLiveness(this.liveMBlocks, this.deadMBlocks, this.major);
+    // set gen number to 0
+    this.heapAlloc.setGenerationNo(0);
     // allocate a new nursery
     this.updateNursery();
     // garbage collect unused JSVals
@@ -1084,6 +1109,7 @@ export class GC {
     this.liveJSVals.clear();
     this.reentrancyGuard.exit(1);
 
+    // FIXME: just an experiment: alternate major and minor collections
     this.major = !this.major;
   }
 }
