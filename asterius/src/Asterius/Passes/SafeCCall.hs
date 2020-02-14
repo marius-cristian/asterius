@@ -175,7 +175,7 @@ splitSingleBlock vts save_instrs base_k base_block@RelooperBlock {..} =
               --
               [ Store
                   { bytes = 8,
-                    offset = fromIntegral offset_StgTSO_ffi_func,
+                    offset = fromIntegral (error "offset_StgTSO_ffi_func"),
                     ptr = wrapInt64 $ getLVal currentTSO,
                     value = ConstI64 0,
                     valueType = I64
@@ -183,7 +183,7 @@ splitSingleBlock vts save_instrs base_k base_block@RelooperBlock {..} =
               ]
                 ++ [ Store
                        { bytes = 8,
-                         offset = fromIntegral offset_StgTSO_ffi_return,
+                         offset = fromIntegral (error "offset_StgTSO_ffi_return"),
                          ptr = wrapInt64 $ getLVal currentTSO,
                          value = ConstI64 0,
                          valueType = I64
@@ -191,7 +191,7 @@ splitSingleBlock vts save_instrs base_k base_block@RelooperBlock {..} =
                    ]
                 ++ [ Store
                        { bytes = 8,
-                         offset = i * 8 + fromIntegral offset_StgTSO_saved_regs,
+                         offset = i * 8 + fromIntegral (error "offset_StgTSO_saved_regs"),
                          ptr = wrapInt64 $ getLVal currentTSO,
                          value = ConstI64 0,
                          valueType = I64
@@ -219,7 +219,7 @@ splitSingleBlock vts save_instrs base_k base_block@RelooperBlock {..} =
                                 I32 -> 4
                                 F32 -> 4
                                 _ -> 8,
-                              offset = fromIntegral offset_StgTSO_ffi_return,
+                              offset = fromIntegral (error "offset_StgTSO_ffi_return"),
                               valueType = vts !! fromIntegral index,
                               ptr = wrapInt64 $ getLVal currentTSO
                             }
@@ -304,7 +304,7 @@ genSaveLoad sym vts
     save_instrs =
       [ Store
           { bytes = bs vt,
-            offset = pos i + fromIntegral offset_StgTSO_saved_regs,
+            offset = pos i + fromIntegral (error "offset_StgTSO_saved_regs"),
             ptr = wrapInt64 $ getLVal currentTSO,
             value = GetLocal {index = i, valueType = vt},
             valueType = vt
@@ -313,7 +313,7 @@ genSaveLoad sym vts
       ]
         <> [ Store
                { bytes = 8,
-                 offset = fromIntegral $ offset_StgTSO_ffi_func,
+                 offset = fromIntegral $ (error "offset_StgTSO_ffi_func"),
                  ptr = wrapInt64 $ getLVal currentTSO,
                  value = Symbol {unresolvedSymbol = sym, symbolOffset = 0},
                  valueType = I64
@@ -351,7 +351,7 @@ genSaveLoad sym vts
               Load
                 { signed = False,
                   bytes = bs vt,
-                  offset = pos i + fromIntegral offset_StgTSO_saved_regs,
+                  offset = pos i + fromIntegral (error "offset_StgTSO_saved_regs"),
                   valueType = vt,
                   ptr = wrapInt64 $ getLVal currentTSO
                 }

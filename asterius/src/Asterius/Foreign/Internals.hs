@@ -393,7 +393,10 @@ processFFIImport hook_state_ref norm_sig_ty (GHC.CImport (GHC.unLoc -> GHC.JavaS
     pure $
       GHC.CImport
         (GHC.noLoc GHC.CCallConv)
-        (GHC.noLoc GHC.PlayRisky)
+        ( GHC.noLoc $ case ffi_safety of
+            FFIUnsafe -> GHC.PlayRisky
+            _ -> GHC.PlaySafe
+        )
         Nothing
         ( GHC.CFunction $
             GHC.StaticTarget
