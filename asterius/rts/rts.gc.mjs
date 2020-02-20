@@ -153,8 +153,8 @@ export class GC {
         [c, untagged_c, info, type] = peek = stack[stack.length-1];
         if (!untagged_c) {
           // If no information about c is present, compute it
-          const untagged_c = peek[1] = Memory.unDynTag(c),
-            info = peek[2] = Number(this.memory.i64Load(untagged_c));
+          untagged_c = peek[1] = Memory.unDynTag(c);
+          info = peek[2] = Number(this.memory.i64Load(untagged_c));
           if (info % 2) {
             // The closures has already been overwritten with a 
             // forwarding pointer: switch phase.
