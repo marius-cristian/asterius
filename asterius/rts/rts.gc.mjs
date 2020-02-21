@@ -204,7 +204,8 @@ export class GC {
             // try to perform selection
             switch (res_type) {
               case ClosureTypes.CONSTR:
-              case ClosureTypes.CONSTR_2_0: {
+              case ClosureTypes.CONSTR_2_0:
+              case ClosureTypes.CONSTR_NOCAF: {
                 const offset = this.memory.i32Load(
                   res_info + rtsConstants.offset_StgInfoTable_layout
                 );
