@@ -188,13 +188,16 @@ export class GC {
         }
       } else {
         // Back propagation phase
+        // Recall! In each of the cases above, the whiteholing
+        // must be undone!
         const current = stack.pop();
         const [_, cur_untagged, cur_info, cur_type] = current;
-        const [res_c, __, ___, res_type] = result;
+        const [res_c, __, res_info, res_type] = result;
         switch (cur_type) {
           case ClosureTypes.IND: {
             this.memory.i64Store(cur_untagged, this.symbolTable.stg_IND_info); // Undo whiteholing
             this.memory.i64Store(cur_untagged + rtsConstants.offset_StgInd_indirectee, res_c);
+            if (stack.length == 0) return ClosureTypes.IND;
             continue;
           }
           case ClosureTypes.THUNK_SELECTOR: {
@@ -245,7 +248,7 @@ export class GC {
         }
       }
     }
-    return [result[2], result[3]];
+    return result[3];
   }
 
   /**
@@ -316,6 +319,8 @@ export class GC {
       // a forwarding address: just follow it
       if (info % 2)
         return Memory.setDynTag(info, tag);
+      let type2 = this.stingyEval(c, untagged_c, info, type);
+      type = type2;
     }
     switch (type) {
       case ClosureTypes.CONSTR_0_1:
