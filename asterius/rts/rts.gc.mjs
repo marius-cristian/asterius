@@ -192,7 +192,9 @@ export class GC {
           case ClosureTypes.IND: {
             this.memory.i64Store(cur_untagged, this.symbolTable.stg_IND_info); // Undo whiteholing
             this.memory.i64Store(cur_untagged + rtsConstants.offset_StgInd_indirectee, res_c);
-            if (stack.length == 0) return ClosureTypes.IND;
+            if (stack.length == 0) {
+              return ClosureTypes.IND;
+            }
             continue;
           }
           case ClosureTypes.THUNK_SELECTOR: {
@@ -204,18 +206,16 @@ export class GC {
                 const offset = this.memory.i32Load(
                   res_info + rtsConstants.offset_StgInfoTable_layout
                 );
-                current[3] = ClosureTypes.IND;
-                stack.push(current); 
-                // Start evaluating the selected field
+                current[3] = ClosureTypes.IND; // no un-whitehole for now
+                stack.push(current);
                 stack.push([res_c + (1 + offset << 3),,,]);
                 result = undefined;
                 continue;
               }
               case ClosureTypes.CONSTR_1_0:
               case ClosureTypes.CONSTR_1_1: {
-                current[3] = ClosureTypes.IND;
-                stack.push(current); 
-                // Start evaluating the selected field
+                current[3] = ClosureTypes.IND; // no un-whitehole for now
+                stack.push(current);
                 stack.push([res_c + 8,,,]);
                 result = undefined;
                 continue;
@@ -301,8 +301,7 @@ export class GC {
     );
     if (type == ClosureTypes.THUNK_SELECTOR || type == ClosureTypes.IND) {
       // Optimize selectors and indirections
-      let type2 = this.stingyEval(c, untagged_c, info, type);
-      type = type2;
+      type = this.stingyEval(c, untagged_c, info, type);
     }
     switch (type) {
       case ClosureTypes.CONSTR_0_1:
@@ -468,7 +467,6 @@ export class GC {
     // Enqueue the destination object in the workList,
     // so that it will be scavenged later
     this.workList.push(dest_c);
-    if (dest_c == 0x1ffff7041054b8) throw WebAssembly.RuntimeError(`LLL type=${type}`);
     // Finally, return the new address
     return Memory.setDynTag(dest_c, tag);
   }
