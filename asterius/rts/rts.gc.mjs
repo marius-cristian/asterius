@@ -149,7 +149,7 @@ export class GC {
     // Note: the two phases can be interleaved. 
     let result, peek;
     while (stack.length) {
-      if (!result) {
+      if (result == undefined) {
         // Search phase
         [c, untagged_c, info, type] = peek = stack[stack.length-1];
         if (!untagged_c) {
@@ -188,12 +188,11 @@ export class GC {
       } else {
         // Back propagation phase
         [c, untagged_c, info, type] = peek = stack.pop();
-        let [res_c, _, res_info, res_type] = result;
+        const [res_c, _, res_info, res_type] = result;
         switch (type) {
           case ClosureTypes.IND: {
             if (res_info % 2) {
               this.memory.i64Store(untagged_c, res_info);
-              info = res_info; type = res_type;
             } else {
               this.memory.i64Store(untagged_c, this.symbolTable.stg_IND_info); // Undo whiteholing
               this.memory.i64Store(untagged_c + rtsConstants.offset_StgInd_indirectee, res_c);
@@ -214,6 +213,7 @@ export class GC {
                 // Start evaluating the selected field
                 stack.push([res_c + (1 + offset << 3),,,]);
                 result = undefined;
+                continue;
               }
               case CONSTR_1_0:
               case CONSTR_1_1: {
@@ -222,6 +222,7 @@ export class GC {
                 // Start evaluating the selected field
                 stack.push([res_c + 8,,,]);
                 result = undefined;
+                continue;
               }
               default: {
                 this.memory.i64Store(untagged_c, info); // Undo whiteholing
@@ -232,6 +233,7 @@ export class GC {
                   this.memory.i64Store(untagged_c + rtsConstants.offset_StgSelector_selectee, res_c); 
                 // Continue backtracking
                 result = peek;
+                continue;
               }
             }
           }
