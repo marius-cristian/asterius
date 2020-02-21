@@ -138,7 +138,8 @@ export class GC {
  *   closure type.
  */
   stingyEval(c, untagged_c, info, type) {
-    const stack = [arguments];
+    const stack = [];
+    stack.push([Number(c), untagged_c, info, type]);
     // This function proceeds by traversing IND and THUNK_SELECTOR
     // closures, until it finds a result. It proceeds in two phases:
     // - Search phase: indirectee/selectee pointers are followed,
@@ -168,14 +169,14 @@ export class GC {
             // Whitehole
             this.memory.i64Store(untagged_c, this.symbolTable.stg_WHITEHOLE_info);
             // Follow the indirectee
-            stack.push([this.memory.i64Load(untagged_c + rtsConstants.offset_StgInd_indirectee),,,]);
+            stack.push([Number(this.memory.i64Load(untagged_c + rtsConstants.offset_StgInd_indirectee)),,,]);
             continue;
           }
           case ClosureTypes.THUNK_SELECTOR: {
             // Whitehole
             this.memory.i64Store(untagged_c, this.symbolTable.stg_WHITEHOLE_info);
             // Follow the selectee
-            stack.push([this.memory.i64Load(untagged_c + rtsConstants.offset_StgSelector_selectee),,,]);
+            stack.push([Number(this.memory.i64Load(untagged_c + rtsConstants.offset_StgSelector_selectee)),,,]);
             continue;
           }
           default: {
@@ -200,26 +201,37 @@ export class GC {
             continue;
           }
           case ClosureTypes.THUNK_SELECTOR: {
-            if (res_type == ClosureTypes.CONSTR) {
-              const offset = this.memory.i32Load(
-                res_info + rtsConstants.offset_StgInfoTable_layout
-              );
-              peek[2] = this.symbolTable.stg_IND_info;
-              stack.push(peek); 
-              // Start evaluating the selected field
-              stack.push([res_c + BigInt(offset),,,]);
-              result = undefined;
-              continue;
-            } else {
-              this.memory.i64Store(untagged_c, info); // Undo whiteholing
-              if (res_info % 2 == 0)
-                // Only if not a forwarding pointer: if the result has already
-                // been evacuated, leave everything as it is, and the
-                // evacuation function will take care of it later
-                this.memory.i64Store(untagged_c + rtsConstants.offset_StgSelector_selectee, res_c); 
-              // Continue backtracking
-              result = peek;
-              continue;
+            // try to perform selection
+            switch (res_type) {
+              case ClosureTypes.CONSTR:
+              case ClosureTypes.CONSTR_2_0: {
+                const offset = this.memory.i32Load(
+                  res_info + rtsConstants.offset_StgInfoTable_layout
+                );
+                peek[2] = this.symbolTable.stg_IND_info;
+                stack.push(peek); 
+                // Start evaluating the selected field
+                stack.push([res_c + (1 + offset << 3),,,]);
+                result = undefined;
+              }
+              case CONSTR_1_0:
+              case CONSTR_1_1: {
+                peek[2] = this.symbolTable.stg_IND_info;
+                stack.push(peek); 
+                // Start evaluating the selected field
+                stack.push([res_c + 8,,,]);
+                result = undefined;
+              }
+              default: {
+                this.memory.i64Store(untagged_c, info); // Undo whiteholing
+                if (res_info % 2 == 0)
+                  // Only if not a forwarding pointer: if the result has already
+                  // been evacuated, leave everything as it is, and the
+                  // evacuation function will take care of it later
+                  this.memory.i64Store(untagged_c + rtsConstants.offset_StgSelector_selectee, res_c); 
+                // Continue backtracking
+                result = peek;
+              }
             }
           }
           // No other options for the switch: only IND or THUNK_SELECTOR
