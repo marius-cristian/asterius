@@ -157,13 +157,8 @@ export class GC {
           // If no information about c is present, compute it
           cur_untagged = current[1] = Memory.unDynTag(cur_c);
           cur_info = current[2] = Number(this.memory.i64Load(cur_untagged));
-          if (cur_info % 2) {
-            // The closures has already been overwritten with a 
-            // forwarding pointer: nothing to do, switch phase.
-            result = stack.pop(); // = current
-            continue;
-          }
-          cur_type = current[3] = this.memory.i32Load(cur_info + rtsConstants.offset_StgInfoTable_type);
+          if (cur_info % 2 == 0)
+            cur_type = current[3] = this.memory.i32Load(cur_info + rtsConstants.offset_StgInfoTable_type);
         }
         switch (cur_type) {
           case ClosureTypes.IND: {
@@ -202,14 +197,6 @@ export class GC {
           }
           case ClosureTypes.THUNK_SELECTOR: {
             // try to perform selection
-            if (res_type == undefined) {
-              // The result has already been scavenged
-              // i.e. its header is a forwarding pointer.
-              // Cancel!
-              this.memory.i64Store(cur_untagged, cur_info); // Undo whiteholing
-              result = current;
-              continue;
-            }
             switch (res_type) {
               case ClosureTypes.CONSTR:
               case ClosureTypes.CONSTR_2_0:
@@ -314,11 +301,6 @@ export class GC {
     );
     if (type == ClosureTypes.THUNK_SELECTOR || type == ClosureTypes.IND) {
       // Optimize selectors and indirections
-      [info, type] = this.stingyEval(c, untagged_c, info, type);
-      // The info header has already been overwritten with
-      // a forwarding address: just follow it
-      if (info % 2)
-        return Memory.setDynTag(info, tag);
       let type2 = this.stingyEval(c, untagged_c, info, type);
       type = type2;
     }
