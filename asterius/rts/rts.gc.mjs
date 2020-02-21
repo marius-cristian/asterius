@@ -137,9 +137,9 @@ export class GC {
  *   of the closure `c` after evaluation, and `type` is the resulting
  *   closure type.
  */
-  stingyEval(c, untagged_c, info, type) {
+  stingyEval(cX, untagged_cX, infoX, typeX) {
     const stack = [];
-    stack.push([Number(c), untagged_c, info, type]);
+    stack.push([Number(cX), untagged_cX, infoX, typeX]);
     // This function proceeds by traversing IND and THUNK_SELECTOR
     // closures, until it finds a result. It proceeds in two phases:
     // - Search phase: indirectee/selectee pointers are followed,
@@ -147,11 +147,12 @@ export class GC {
     // - Back propagation phase: the closures on the stack are popped
     //     and replaced with IND closures where possible.
     // Note: the two phases can be interleaved. 
-    let result, peek;
+    let result;
     while (stack.length) {
       if (result == undefined) {
         // Search phase
-        [c, untagged_c, info, type] = peek = stack[stack.length-1];
+        const peek = stack[stack.length-1];
+        let [c, untagged_c, info, type] = peek;
         if (!untagged_c) {
           // If no information about c is present, compute it
           untagged_c = peek[1] = Memory.unDynTag(c);
@@ -187,7 +188,8 @@ export class GC {
         }
       } else {
         // Back propagation phase
-        [c, untagged_c, info, type] = peek = stack.pop();
+        const peek = stack[stack.length-1];
+        const [__, untagged_c, info, type] = peek;
         const [res_c, _, res_info, res_type] = result;
         switch (type) {
           case ClosureTypes.IND: {
@@ -208,16 +210,16 @@ export class GC {
                 const offset = this.memory.i32Load(
                   res_info + rtsConstants.offset_StgInfoTable_layout
                 );
-                peek[2] = this.symbolTable.stg_IND_info;
+                peek[3] = ClosureTypes.IND;
                 stack.push(peek); 
                 // Start evaluating the selected field
                 stack.push([res_c + (1 + offset << 3),,,]);
                 result = undefined;
                 continue;
               }
-              case CONSTR_1_0:
-              case CONSTR_1_1: {
-                peek[2] = this.symbolTable.stg_IND_info;
+              case ClosureTypes.CONSTR_1_0:
+              case ClosureTypes.CONSTR_1_1: {
+                peek[3] = ClosureTypes.IND;
                 stack.push(peek); 
                 // Start evaluating the selected field
                 stack.push([res_c + 8,,,]);
@@ -243,7 +245,7 @@ export class GC {
         }
       }
     }
-    return [info, type];
+    return [result[2], result[3]];
   }
 
   /**
@@ -392,6 +394,7 @@ export class GC {
         // cannot simply break here, because dest_c must not
         // be pushed to this.workList since it has already
         // been evacuated above
+        console.log(`IND addr=${c.toString(16)}`);
         this.memory.i64Store(untagged_c, dest_c + 1);
         return dest_c;
       }
@@ -479,6 +482,7 @@ export class GC {
     // Enqueue the destination object in the workList,
     // so that it will be scavenged later
     this.workList.push(dest_c);
+    if (dest_c == 0x1ffff7041054b8) throw WebAssembly.RuntimeError(`LLL type=${type}`);
     // Finally, return the new address
     return Memory.setDynTag(dest_c, tag);
   }
@@ -725,6 +729,7 @@ export class GC {
       throw new WebAssembly.RuntimeError(
         `Invalid info table 0x${info.toString(16)}`
       );
+    console.log("I want to scavenge type", type, `address ${c.toString(16)}`);
     switch (type) {
       case ClosureTypes.CONSTR:
       case ClosureTypes.CONSTR_1_0:
